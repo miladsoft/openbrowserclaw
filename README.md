@@ -2,7 +2,7 @@
 
 Browser-native personal AI assistant. Zero infrastructure — the browser is the server.
 
-Built as a browser-only reimagination of [NanoClaw](../README.md). Same philosophy — small enough to understand, secure by default, built for one user — but running entirely in a browser tab.
+Built as a browser-only reimagination of NanoClaw. Same philosophy, small enough to understand, built for one user, but running entirely in a browser tab.
 
 ## Quick Start
 
@@ -58,7 +58,7 @@ Open `http://localhost:5173`, paste your [Anthropic API key](https://console.ant
 | `src/channels/browser-chat.ts` | In-browser chat channel |
 | `src/channels/telegram.ts` | Telegram Bot API channel |
 | `src/task-scheduler.ts` | Cron expression evaluation |
-| `src/crypto.ts` | AES-256-GCM encryption for API keys |
+| `src/crypto.ts` | AES-256-GCM encryption for stored credentials |
 | `src/ui/` | Chat, settings, and task manager components |
 
 ## How It Works
@@ -139,3 +139,20 @@ npm run build
 ```
 
 No server needed. It's just HTML, CSS, and JS.
+
+## Security
+
+OpenBrowserClaw is a proof of concept. All data stays in your browser, nothing is sent to any server except the Anthropic API. Here's an honest look at the current security posture:
+
+**What it does:**
+- API keys are encrypted at rest with AES-256-GCM using a non-extractable `CryptoKey` stored in IndexedDB. JavaScript cannot export the raw key material.
+- All storage (IndexedDB, OPFS) is same-origin scoped by the browser.
+- The agent runs in a Web Worker, separate from the UI thread.
+
+**What it doesn't do (yet):**
+- The encryption protects against casual inspection (DevTools, disk forensics) but not a full XSS attack on the same origin, an attacker with script execution could call the encrypt/decrypt API.
+- The `javascript` tool runs `eval()` in the Worker, which has access to `fetch()`. This means Claude can make arbitrary HTTP requests through the JS tool regardless of any `fetch_url` restrictions.
+- Outgoing HTTP requests (via `fetch_url` or the JS tool) have no user confirmation step.
+- The Telegram bot token is currently stored in plaintext.
+
+This is a single-user local tool, not a multi-tenant platform. Contributions to improve the security model are welcome.
