@@ -12,6 +12,7 @@ import { ToolActivity } from './ToolActivity.js';
 import { ActivityLog } from './ActivityLog.js';
 import { ContextBar } from './ContextBar.js';
 import { ChatActions } from './ChatActions.js';
+import { HtmlPreview } from './HtmlPreview.js';
 
 const LineGraphIcon = ({ className }: { className?: string }) => (
     <svg
@@ -54,6 +55,7 @@ export function ChatPage() {
   const activityLog = useOrchestratorStore((s) => s.activityLog);
   const orchState = useOrchestratorStore((s) => s.state);
   const tokenUsage = useOrchestratorStore((s) => s.tokenUsage);
+  const htmlPreviews = useOrchestratorStore((s) => s.htmlPreviews);
   const error = useOrchestratorStore((s) => s.error);
   const sendMessage = useOrchestratorStore((s) => s.sendMessage);
   const loadHistory = useOrchestratorStore((s) => s.loadHistory);
@@ -104,6 +106,19 @@ export function ChatPage() {
         )}
 
         <MessageList messages={messages} />
+
+        {/* HTML previews rendered by the html_preview tool */}
+        {htmlPreviews.map((preview) => (
+          <div key={preview.id} className="chat chat-start">
+            <div className="chat-bubble p-1 max-w-full w-full">
+              <HtmlPreview
+                html={preview.html}
+                title={preview.title}
+                height={preview.height}
+              />
+            </div>
+          </div>
+        ))}
 
         {isTyping && <TypingIndicator />}
         {toolActivity && (

@@ -47,6 +47,16 @@ export default defineConfig({
     target: 'es2022',
     outDir: 'dist',
   },
+  server: {
+    host: '0.0.0.0',
+    proxy: {
+      '/api/proxy': {
+        target: 'http://localhost:3456',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/proxy/, ''),
+      },
+    },
+  },
   worker: {
     format: 'es',
   },

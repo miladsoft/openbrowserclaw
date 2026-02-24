@@ -13,6 +13,15 @@ import type { Orchestrator } from '../orchestrator.js';
 import { DEFAULT_GROUP_ID } from '../config.js';
 import { getRecentMessages } from '../db.js';
 
+interface HtmlPreviewEntry {
+  id: string;
+  groupId: string;
+  html: string;
+  title: string;
+  height: number;
+  timestamp: number;
+}
+
 interface OrchestratorStoreState {
   // --- reactive state ---
   messages: StoredMessage[];
@@ -24,6 +33,7 @@ interface OrchestratorStoreState {
   error: string | null;
   activeGroupId: string;
   ready: boolean;
+  htmlPreviews: HtmlPreviewEntry[];
 
   // --- actions ---
   sendMessage: (text: string) => void;
@@ -50,6 +60,7 @@ export const useOrchestratorStore = create<OrchestratorStoreState>((set, get) =>
   error: null,
   activeGroupId: DEFAULT_GROUP_ID,
   ready: false,
+  htmlPreviews: [],
 
   sendMessage: (text) => {
     const orch = getOrchestrator();
@@ -125,6 +136,7 @@ export async function initOrchestratorStore(orch: Orchestrator): Promise<void> {
       tokenUsage: null,
       toolActivity: null,
       isTyping: false,
+      htmlPreviews: [],
     });
   });
 
@@ -135,6 +147,18 @@ export async function initOrchestratorStore(orch: Orchestrator): Promise<void> {
 
   orch.events.on('token-usage', (usage) => {
     store.setState({ tokenUsage: usage });
+  });
+
+  orch.events.on('html-preview', (payload: { groupId: string; html: string; title?: string; height?: number }) => {
+    const entry: HtmlPreviewEntry = {
+      id: `hp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      groupId: payload.groupId,
+      html: payload.html,
+      title: payload.title || 'Preview',
+      height: payload.height || 400,
+      timestamp: Date.now(),
+    };
+    store.setState((s) => ({ htmlPreviews: [...s.htmlPreviews, entry] }));
   });
 
   orch.events.on('ready', () => {

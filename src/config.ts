@@ -17,13 +17,25 @@ export const TRIGGER_PATTERN = buildTriggerPattern(ASSISTANT_NAME);
 export const CONTEXT_WINDOW_SIZE = 50;
 
 /** Max tokens for Claude API response */
-export const DEFAULT_MAX_TOKENS = 8096;
+export const DEFAULT_MAX_TOKENS = 16384;
 
 /** Default model */
-export const DEFAULT_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_MODEL = 'claude-sonnet-4.6';
 
-/** Anthropic API endpoint */
+/** Anthropic API endpoint (direct mode) */
 export const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+
+/** Copilot proxy endpoint (proxy mode — routed via Vite dev proxy) */
+export const COPILOT_PROXY_URL = '/api/proxy/v1/messages';
+
+/** Copilot proxy auth endpoint */
+export const COPILOT_PROXY_AUTH_URL = '/api/proxy/auth/github-token';
+
+/** Copilot proxy status endpoint */
+export const COPILOT_PROXY_STATUS_URL = '/api/proxy/auth/status';
+
+/** API provider type */
+export type ApiProvider = 'anthropic' | 'copilot-proxy';
 
 /** Anthropic API version header */
 export const ANTHROPIC_API_VERSION = '2023-06-01';
@@ -43,8 +55,11 @@ export const SCHEDULER_INTERVAL = 60_000;
 /** Message processing loop interval (ms) */
 export const PROCESS_LOOP_INTERVAL = 100;
 
-/** Fetch tool response truncation limit */
-export const FETCH_MAX_RESPONSE = 20_000;
+/** Fetch tool response truncation limit (keep low to preserve context window) */
+export const FETCH_MAX_RESPONSE = 8_000;
+
+/** CORS proxy endpoint (routes through the proxy server to bypass CORS) */
+export const CORS_PROXY_URL = '/api/proxy/cors-proxy';
 
 /** IndexedDB database name */
 export const DB_NAME = 'openbrowserclaw';
@@ -61,6 +76,8 @@ export const DEFAULT_GROUP_ID = 'br:main';
 /** Config keys */
 export const CONFIG_KEYS = {
   ANTHROPIC_API_KEY: 'anthropic_api_key',
+  GITHUB_TOKEN: 'github_token',
+  API_PROVIDER: 'api_provider',
   TELEGRAM_BOT_TOKEN: 'telegram_bot_token',
   TELEGRAM_CHAT_IDS: 'telegram_chat_ids',
   TRIGGER_PATTERN: 'trigger_pattern',

@@ -20,6 +20,7 @@ import type {
   ConversationMessage,
   ThinkingLogEntry,
 } from './types.js';
+import type { ApiProvider } from './config.js';
 import {
   ASSISTANT_NAME,
   CONFIG_KEYS,
@@ -27,6 +28,8 @@ import {
   DEFAULT_GROUP_ID,
   DEFAULT_MAX_TOKENS,
   DEFAULT_MODEL,
+  COPILOT_PROXY_AUTH_URL,
+  COPILOT_PROXY_STATUS_URL,
   buildTriggerPattern,
 } from './config.js';
 import {
@@ -62,6 +65,7 @@ type EventMap = {
   'session-reset': { groupId: string };
   'context-compacted': { groupId: string; summary: string };
   'token-usage': import('./types.js').TokenUsage;
+  'html-preview': { groupId: string; html: string; title?: string; height?: number };
 };
 
 type EventCallback<T> = (data: T) => void;
@@ -101,6 +105,8 @@ export class Orchestrator {
   private triggerPattern!: RegExp;
   private assistantName: string = ASSISTANT_NAME;
   private apiKey: string = '';
+  private githubToken: string = '';
+  private provider: ApiProvider = 'anthropic';
   private model: string = DEFAULT_MODEL;
   private maxTokens: number = DEFAULT_MAX_TOKENS;
   private messageQueue: InboundMessage[] = [];
@@ -126,6 +132,21 @@ export class Orchestrator {
         this.apiKey = '';
         await setConfig(CONFIG_KEYS.ANTHROPIC_API_KEY, '');
       }
+    }
+    // Load GitHub token
+    const storedGhToken = await getConfig(CONFIG_KEYS.GITHUB_TOKEN);
+    if (storedGhToken) {
+      try {
+        this.githubToken = await decryptValue(storedGhToken);
+      } catch {
+        this.githubToken = '';
+        await setConfig(CONFIG_KEYS.GITHUB_TOKEN, '');
+      }
+    }
+    // Load provider
+    const storedProvider = await getConfig(CONFIG_KEYS.API_PROVIDER);
+    if (storedProvider === 'copilot-proxy' || storedProvider === 'anthropic') {
+      this.provider = storedProvider as ApiProvider;
     }
     this.model = (await getConfig(CONFIG_KEYS.MODEL)) || DEFAULT_MODEL;
     this.maxTokens = parseInt(
@@ -183,19 +204,72 @@ export class Orchestrator {
   }
 
   /**
-   * Check if the API key is configured.
+   * Check if the API key is configured (for the current provider).
    */
   isConfigured(): boolean {
+    if (this.provider === 'copilot-proxy') {
+      // Proxy server handles auth — no local token needed
+      return true;
+    }
     return this.apiKey.length > 0;
   }
 
   /**
-   * Update the API key.
+   * Update the API key (Anthropic direct mode).
    */
   async setApiKey(key: string): Promise<void> {
     this.apiKey = key;
     const encrypted = await encryptValue(key);
     await setConfig(CONFIG_KEYS.ANTHROPIC_API_KEY, encrypted);
+  }
+
+  /**
+   * Set GitHub token (Copilot proxy mode) and register with the proxy.
+   */
+  async setGithubToken(token: string): Promise<void> {
+    this.githubToken = token;
+    const encrypted = await encryptValue(token);
+    await setConfig(CONFIG_KEYS.GITHUB_TOKEN, encrypted);
+
+    // Send to proxy server
+    if (token) {
+      const res = await fetch(COPILOT_PROXY_AUTH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(err.error || `Auth failed: ${res.status}`);
+      }
+    }
+  }
+
+  /**
+   * Get current API provider.
+   */
+  getProvider(): ApiProvider {
+    return this.provider;
+  }
+
+  /**
+   * Set API provider.
+   */
+  async setProvider(provider: ApiProvider): Promise<void> {
+    this.provider = provider;
+    await setConfig(CONFIG_KEYS.API_PROVIDER, provider);
+  }
+
+  /**
+   * Check Copilot proxy auth status.
+   */
+  async getCopilotStatus(): Promise<{ authenticated: boolean; reason?: string }> {
+    try {
+      const res = await fetch(COPILOT_PROXY_STATUS_URL);
+      return await res.json();
+    } catch {
+      return { authenticated: false, reason: 'Proxy server not reachable' };
+    }
   }
 
   /**
@@ -261,10 +335,10 @@ export class Orchestrator {
    * Asks Claude to produce a summary, then replaces the history with it.
    */
   async compactContext(groupId: string = DEFAULT_GROUP_ID): Promise<void> {
-    if (!this.apiKey) {
+    if (!this.isConfigured()) {
       this.events.emit('error', {
         groupId,
-        error: 'API key not configured. Cannot compact context.',
+        error: 'API credentials not configured. Cannot compact context.',
       });
       return;
     }
@@ -300,6 +374,7 @@ export class Orchestrator {
         apiKey: this.apiKey,
         model: this.model,
         maxTokens: this.maxTokens,
+        provider: this.provider,
       },
     });
   }
@@ -350,8 +425,8 @@ export class Orchestrator {
   private async processQueue(): Promise<void> {
     if (this.processing) return;
     if (this.messageQueue.length === 0) return;
-    if (!this.apiKey) {
-      // Can't process without API key
+    if (!this.apiKey && this.provider === 'anthropic') {
+      // Can't process without API key in direct mode
       const msg = this.messageQueue.shift()!;
       this.events.emit('error', {
         groupId: msg.groupId,
@@ -422,6 +497,7 @@ export class Orchestrator {
         apiKey: this.apiKey,
         model: this.model,
         maxTokens: this.maxTokens,
+        provider: this.provider,
       },
     });
   }
@@ -467,6 +543,12 @@ export class Orchestrator {
         break;
       }
 
+      case 'html-preview': {
+        // Emit event so the chat UI can render the preview inline
+        this.events.emit('html-preview', msg.payload);
+        break;
+      }
+
       case 'compact-done': {
         await this.handleCompactDone(msg.payload.groupId, msg.payload.summary);
         break;
@@ -502,6 +584,14 @@ export class Orchestrator {
   }
 
   private async deliverResponse(groupId: string, text: string): Promise<void> {
+    // If text is empty (e.g. model only used tools like html_preview), just clean up state
+    if (!text) {
+      this.events.emit('typing', { groupId, typing: false });
+      this.setState('idle');
+      this.router.setTyping(groupId, false);
+      return;
+    }
+
     // Save to DB
     const stored: StoredMessage = {
       id: ulid(),
@@ -541,20 +631,23 @@ function buildSystemPrompt(assistantName: string, memory: string): string {
   const parts = [
     `You are ${assistantName}, a personal AI assistant running in the user's browser.`,
     '',
-    'You have access to the following tools:',
-    '- **bash**: Execute commands in a sandboxed Linux VM (Alpine). Use for scripts, text processing, package installation.',
-    '- **javascript**: Execute JavaScript code. Lighter than bash — no VM boot needed. Use for calculations, data transforms.',
-    '- **read_file** / **write_file** / **list_files**: Manage files in the group workspace (persisted in browser storage).',
-    '- **fetch_url**: Make HTTP requests (subject to CORS).',
-    '- **update_memory**: Persist important context to CLAUDE.md — loaded on every conversation.',
+    '## TOOLS AVAILABLE',
+    '- **bash**: Execute shell commands in a sandboxed Linux VM.',
+    '- **javascript**: Execute JavaScript code (lighter than bash).',
+    '- **read_file** / **write_file** / **list_files**: Manage files in the group workspace.',
+    '- **fetch_url**: Fetch any URL (no CORS restrictions — server-side proxy).',
+    '- **update_memory**: Save context to CLAUDE.md for future conversations.',
     '- **create_task**: Schedule recurring tasks with cron expressions.',
+    '- **html_preview**: Render interactive HTML directly in chat (maps, charts, games, dashboards, etc).',
     '',
-    'Guidelines:',
-    '- Be concise and direct.',
-    '- Use tools proactively when they help answer the question.',
-    '- Update memory when you learn important preferences or context.',
-    '- For scheduled tasks, confirm the schedule with the user.',
-    '- Strip <internal> tags from your responses — they are for your internal reasoning only.',
+    '## RULES',
+    '',
+    '1. **Act, don\'t describe.** Respond to actionable requests with tool calls, not explanations of what you plan to do.',
+    '2. **Be autonomous.** If a tool call fails or returns no data, try a different approach automatically. Do not ask the user for permission — just pivot and keep going.',
+    '3. **Visual content → html_preview.** Any interactive content (maps, charts, games, dashboards) MUST use html_preview. Never paste raw HTML as text.',
+    '4. **fetch_url has no restrictions.** It proxies through the server — works with any URL, any API.',
+    '5. **Minimize fetch_url calls.** Responses are truncated to 8 KB. Prefer one structured API call over multiple web scrapes.',
+    '6. Be concise. Use tools proactively. Update memory for important context.',
   ];
 
   if (memory) {

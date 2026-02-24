@@ -11,7 +11,8 @@
 
 import type { WorkerInbound, WorkerOutbound, InvokePayload, CompactPayload, ConversationMessage, ThinkingLogEntry, TokenUsage } from './types.js';
 import { TOOL_DEFINITIONS } from './tools.js';
-import { ANTHROPIC_API_URL, ANTHROPIC_API_VERSION, FETCH_MAX_RESPONSE } from './config.js';
+import { ANTHROPIC_API_URL, ANTHROPIC_API_VERSION, COPILOT_PROXY_URL, CORS_PROXY_URL, FETCH_MAX_RESPONSE } from './config.js';
+import type { ApiProvider } from './config.js';
 import { readGroupFile, writeGroupFile, listGroupFiles } from './storage.js';
 import { executeShell } from './shell.js';
 import { ulid } from './ulid.js';
@@ -43,14 +44,18 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
 // ---------------------------------------------------------------------------
 
 async function handleInvoke(payload: InvokePayload): Promise<void> {
-  const { groupId, messages, systemPrompt, apiKey, model, maxTokens } = payload;
+  const { groupId, messages, systemPrompt, apiKey, model, maxTokens, provider } = payload;
 
   post({ type: 'typing', payload: { groupId } });
   log(groupId, 'info', 'Starting', `Model: ${model} · Max tokens: ${maxTokens}`);
 
+  // Reset auto-continue counter for this invocation
+  autoContinueCount = 0;
+
   try {
     let currentMessages: ConversationMessage[] = [...messages];
     let iterations = 0;
+    let hasUsedTools = false; // Track if any tool has been called in this invocation
     const maxIterations = 25; // Safety limit to prevent infinite loops
 
     while (iterations < maxIterations) {
@@ -65,16 +70,22 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
         tools: TOOL_DEFINITIONS,
       };
 
-      log(groupId, 'api-call', `API call #${iterations}`, `${currentMessages.length} messages in context`);
+      const useProxy = (provider || 'anthropic') === 'copilot-proxy';
+      const apiUrl = useProxy ? COPILOT_PROXY_URL : ANTHROPIC_API_URL;
+      const headers: Record<string, string> = useProxy
+        ? { 'Content-Type': 'application/json' }
+        : {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': ANTHROPIC_API_VERSION,
+            'anthropic-dangerous-direct-browser-access': 'true',
+          };
 
-      const res = await fetch(ANTHROPIC_API_URL, {
+      log(groupId, 'api-call', `API call #${iterations}`, `${currentMessages.length} messages · ${useProxy ? 'Copilot proxy' : 'Anthropic direct'}`);
+
+      const res = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': ANTHROPIC_API_VERSION,
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
+        headers,
         body: JSON.stringify(body),
       });
 
@@ -109,6 +120,12 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
       }
 
       if (result.stop_reason === 'tool_use') {
+        if (!hasUsedTools) {
+          // First time using tools — reset nudge counter so post-tool
+          // auto-continues get a fresh budget (initial nudges don't eat into it)
+          hasUsedTools = true;
+          autoContinueCount = 0;
+        }
         // Execute all tool calls
         const toolResults = [];
         for (const block of result.content) {
@@ -150,16 +167,55 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
         // Re-signal typing between tool iterations
         post({ type: 'typing', payload: { groupId } });
       } else {
-        // Final response — extract text
+        // end_turn or max_tokens — extract text
         const text = result.content
           .filter((b: { type: string }) => b.type === 'text')
           .map((b: { text: string }) => b.text)
           .join('');
 
-        // Strip internal tags (matching NanoClaw pattern)
         const cleaned = text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
 
-        post({ type: 'response', payload: { groupId, text: cleaned || '(no response)' } });
+        // Check if the model stopped mid-task (wants to continue but didn't use tools)
+        // Strategy: If no tools have been called AT ALL in this invocation,
+        // always nudge — the model is describing instead of acting.
+        // After tools have run, nudge if response is empty (model froze).
+        const isEmptyResponse = !cleaned;
+        const shouldNudge = autoContinueCount < MAX_AUTO_CONTINUES && (
+          // No tools used yet in this entire invocation — keep pushing
+          !hasUsedTools ||
+          // Empty response after tools ran — model froze, nudge it
+          isEmptyResponse
+        );
+
+        if (iterations < maxIterations && shouldNudge) {
+          autoContinueCount++;
+          
+          const reason = !cleaned
+            ? 'Model returned empty response — nudging to act'
+            : 'Model returned text without tool calls — nudging to act';
+          log(groupId, 'info', 'Auto-continue', reason);
+
+          // Escalating nudge messages — get progressively more forceful
+          const nudgeMessages = [
+            'Continue — use the tools to complete the task.',
+            'You must use a tool now. Pick the most relevant one and invoke it.',
+            'Your next message MUST be a tool call, not text.',
+          ];
+          const nudgeIdx = Math.min(autoContinueCount - 1, nudgeMessages.length - 1);
+
+          currentMessages.push({ role: 'assistant', content: result.content });
+          currentMessages.push({
+            role: 'user',
+            content: !cleaned
+              ? 'You did not provide a response or call a tool. ' + nudgeMessages[nudgeIdx]
+              : nudgeMessages[nudgeIdx],
+          });
+
+          post({ type: 'typing', payload: { groupId } });
+          continue; // Re-enter the loop
+        }
+
+        post({ type: 'response', payload: { groupId, text: cleaned || (iterations > 1 ? '' : '(no response)') } });
         return;
       }
     }
@@ -183,7 +239,7 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function handleCompact(payload: CompactPayload): Promise<void> {
-  const { groupId, messages, systemPrompt, apiKey, model, maxTokens } = payload;
+  const { groupId, messages, systemPrompt, apiKey, model, maxTokens, provider } = payload;
 
   post({ type: 'typing', payload: { groupId } });
   log(groupId, 'info', 'Compacting context', `Summarizing ${messages.length} messages`);
@@ -216,14 +272,20 @@ async function handleCompact(payload: CompactPayload): Promise<void> {
       messages: compactMessages,
     };
 
-    const res = await fetch(ANTHROPIC_API_URL, {
+    const useProxy = (provider || 'anthropic') === 'copilot-proxy';
+    const apiUrl = useProxy ? COPILOT_PROXY_URL : ANTHROPIC_API_URL;
+    const headers: Record<string, string> = useProxy
+      ? { 'Content-Type': 'application/json' }
+      : {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_API_VERSION,
+          'anthropic-dangerous-direct-browser-access': 'true',
+        };
+
+    const res = await fetch(apiUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_API_VERSION,
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers,
       body: JSON.stringify(body),
     });
 
@@ -285,11 +347,32 @@ async function executeTool(
       }
 
       case 'fetch_url': {
-        const fetchRes = await fetch(input.url as string, {
-          method: (input.method as string) || 'GET',
-          headers: input.headers as Record<string, string> | undefined,
-          body: input.body as string | undefined,
-        });
+        const targetUrl = input.url as string;
+        const method = (input.method as string) || 'GET';
+
+        // Route through CORS proxy (server-side fetch bypasses CORS)
+        // Send all fetch params as a structured JSON POST to the proxy
+        let fetchRes: Response;
+        try {
+          fetchRes = await fetch(CORS_PROXY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: targetUrl,
+              method,
+              headers: input.headers || undefined,
+              body: input.body || undefined,
+            }),
+          });
+        } catch {
+          // Proxy not available — try direct (will likely fail for cross-origin)
+          fetchRes = await fetch(targetUrl, {
+            method,
+            headers: input.headers as Record<string, string> | undefined,
+            body: input.body as string | undefined,
+          });
+        }
+
         const rawText = await fetchRes.text();
         const contentType = fetchRes.headers.get('content-type') || '';
         const status = `[HTTP ${fetchRes.status}]\n`;
@@ -340,6 +423,20 @@ async function executeTool(
         }
       }
 
+      case 'html_preview': {
+        const html = input.html as string;
+        const title = (input.title as string) || 'Preview';
+        const height = Math.min((input.height as number) || 400, 800);
+
+        // Send HTML to main thread for rendering in the chat
+        post({
+          type: 'html-preview',
+          payload: { groupId, html, title, height },
+        });
+
+        return `HTML preview rendered: "${title}" (${html.length} bytes, ${height}px tall)`;
+      }
+
       default:
         return `Unknown tool: ${name}`;
     }
@@ -355,6 +452,10 @@ async function executeTool(
 function post(message: WorkerOutbound): void {
   (self as unknown as Worker).postMessage(message);
 }
+
+/** Auto-continue budget — prevents infinite nudge loops. */
+let autoContinueCount = 0;
+const MAX_AUTO_CONTINUES = 5;
 
 /**
  * Extract readable text from HTML, stripping tags, scripts, styles, and

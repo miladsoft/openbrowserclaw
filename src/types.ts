@@ -79,6 +79,7 @@ export interface CompactPayload {
   apiKey: string;
   model: string;
   maxTokens: number;
+  provider?: 'anthropic' | 'copilot-proxy';
 }
 
 export interface InvokePayload {
@@ -88,6 +89,7 @@ export interface InvokePayload {
   apiKey: string;
   model: string;
   maxTokens: number;
+  provider?: 'anthropic' | 'copilot-proxy';
 }
 
 /** Messages sent from Agent Worker → main thread */
@@ -99,7 +101,8 @@ export type WorkerOutbound =
   | { type: 'thinking-log'; payload: ThinkingLogEntry }
   | { type: 'compact-done'; payload: { groupId: string; summary: string } }
   | { type: 'token-usage'; payload: TokenUsage }
-  | { type: 'task-created'; payload: { task: Task } };
+  | { type: 'task-created'; payload: { task: Task } }
+  | { type: 'html-preview'; payload: { groupId: string; html: string; title?: string; height?: number } };
 
 /** Token usage info from the API */
 export interface TokenUsage {

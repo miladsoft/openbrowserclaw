@@ -5,19 +5,29 @@
 import { useEffect, useState } from 'react';
 import {
   Palette, KeyRound, Eye, EyeOff, Bot, MessageSquare,
-  Smartphone, HardDrive, Lock, Check,
+  Smartphone, HardDrive, Lock, Check, Github, Zap,
 } from 'lucide-react';
 import { getConfig, setConfig } from '../../db.js';
 import { CONFIG_KEYS } from '../../config.js';
+import type { ApiProvider } from '../../config.js';
 import { getStorageEstimate, requestPersistentStorage } from '../../storage.js';
 import { decryptValue } from '../../crypto.js';
 import { getOrchestrator } from '../../stores/orchestrator-store.js';
 import { useThemeStore, type ThemeChoice } from '../../stores/theme-store.js';
 
 const MODELS = [
-  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  { value: 'claude-opus-4.6', label: 'Claude Opus 4.6', multiplier: 3 },
+  { value: 'claude-opus-4.6-fast', label: 'Claude Opus 4.6 (fast mode)', multiplier: 30 },
+  { value: 'claude-sonnet-4.6', label: 'Claude Sonnet 4.6', multiplier: 1 },
+  { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5', multiplier: 0.33 },
+  { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', multiplier: 1 },
+  { value: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', multiplier: 1 },
+  { value: 'gpt-5.2', label: 'GPT-5.2', multiplier: 1 },
+  { value: 'gpt-5.1', label: 'GPT-5.1', multiplier: 1 },
+  { value: 'gpt-5-mini', label: 'GPT-5 Mini', multiplier: 0.33 },
+  { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', multiplier: 1 },
+  { value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro', multiplier: 1 },
+  { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', multiplier: 0.33 },
 ];
 
 function formatBytes(bytes: number): string {
@@ -31,10 +41,23 @@ function formatBytes(bytes: number): string {
 export function SettingsPage() {
   const orch = getOrchestrator();
 
-  // API Key
+  // Provider
+  const [provider, setProviderState] = useState<ApiProvider>(orch.getProvider());
+
+  // API Key (Anthropic direct)
   const [apiKey, setApiKey] = useState('');
   const [apiKeyMasked, setApiKeyMasked] = useState(true);
   const [apiKeySaved, setApiKeySaved] = useState(false);
+
+  // GitHub Token (Copilot proxy)
+  const [githubToken, setGithubToken] = useState('');
+  const [githubTokenMasked, setGithubTokenMasked] = useState(true);
+  const [githubTokenSaved, setGithubTokenSaved] = useState(false);
+  const [githubTokenError, setGithubTokenError] = useState('');
+  const [copilotStatus, setCopilotStatus] = useState<string>('');
+  const [copilotConnected, setCopilotConnected] = useState(false);
+  const [copilotChecking, setCopilotChecking] = useState(false);
+  const [showManualToken, setShowManualToken] = useState(false);
 
   // Model
   const [model, setModel] = useState(orch.getModel());
@@ -69,6 +92,22 @@ export function SettingsPage() {
         }
       }
 
+      // GitHub token
+      const encGh = await getConfig(CONFIG_KEYS.GITHUB_TOKEN);
+      if (encGh) {
+        try {
+          const dec = await decryptValue(encGh);
+          setGithubToken(dec);
+        } catch {
+          setGithubToken('');
+        }
+      }
+
+      // Check Copilot proxy status
+      const status = await orch.getCopilotStatus();
+      setCopilotConnected(status.authenticated);
+      setCopilotStatus(status.authenticated ? '✓ Connected' : status.reason || 'Not connected');
+
       // Telegram
       const token = await getConfig(CONFIG_KEYS.TELEGRAM_BOT_TOKEN);
       if (token) setTelegramToken(token);
@@ -96,6 +135,47 @@ export function SettingsPage() {
     await orch.setApiKey(apiKey.trim());
     setApiKeySaved(true);
     setTimeout(() => setApiKeySaved(false), 2000);
+  }
+
+  async function handleProviderChange(value: ApiProvider) {
+    setProviderState(value);
+    await orch.setProvider(value);
+    if (value === 'copilot-proxy') {
+      // Re-check proxy status when switching
+      setCopilotChecking(true);
+      const status = await orch.getCopilotStatus();
+      setCopilotConnected(status.authenticated);
+      setCopilotStatus(status.authenticated ? '✓ Connected' : status.reason || 'Not connected');
+      setCopilotChecking(false);
+    }
+  }
+
+  async function handleConnectCopilot() {
+    setCopilotChecking(true);
+    setGithubTokenError('');
+    const status = await orch.getCopilotStatus();
+    if (status.authenticated) {
+      setCopilotConnected(true);
+      setCopilotStatus('✓ Connected');
+    } else {
+      setCopilotConnected(false);
+      setCopilotStatus(status.reason || 'Not connected');
+      setShowManualToken(true);
+    }
+    setCopilotChecking(false);
+  }
+
+  async function handleSaveGithubToken() {
+    setGithubTokenError('');
+    try {
+      await orch.setGithubToken(githubToken.trim());
+      setGithubTokenSaved(true);
+      setTimeout(() => setGithubTokenSaved(false), 2000);
+      const status = await orch.getCopilotStatus();
+      setCopilotStatus(status.authenticated ? '✓ Connected' : status.reason || 'Not connected');
+    } catch (err: any) {
+      setGithubTokenError(err.message || 'Failed to authenticate');
+    }
   }
 
   async function handleModelChange(value: string) {
@@ -147,42 +227,155 @@ export function SettingsPage() {
         </div>
       </div>
 
-      {/* ---- API Key ---- */}
+      {/* ---- API Provider ---- */}
       <div className="card card-bordered bg-base-200">
         <div className="card-body p-4 sm:p-6 gap-3">
-          <h3 className="card-title text-base gap-2"><KeyRound className="w-4 h-4" /> Anthropic API Key</h3>
+          <h3 className="card-title text-base gap-2"><Zap className="w-4 h-4" /> API Provider</h3>
           <div className="flex gap-2">
-            <input
-              type={apiKeyMasked ? 'password' : 'text'}
-              className="input input-bordered input-sm w-full flex-1 font-mono"
-              placeholder="sk-ant-..."
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => setApiKeyMasked(!apiKeyMasked)}
-            >
-              {apiKeyMasked ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={handleSaveApiKey}
-              disabled={!apiKey.trim()}
-            >
-              Save
-            </button>
-            {apiKeySaved && (
-              <span className="text-success text-sm flex items-center gap-1"><Check className="w-4 h-4" /> Saved</span>
-            )}
+            <label className="label cursor-pointer gap-2">
+              <input
+                type="radio"
+                name="provider"
+                className="radio radio-sm radio-primary"
+                checked={provider === 'anthropic'}
+                onChange={() => handleProviderChange('anthropic')}
+              />
+              <span className="label-text">Anthropic Direct</span>
+            </label>
+            <label className="label cursor-pointer gap-2">
+              <input
+                type="radio"
+                name="provider"
+                className="radio radio-sm radio-primary"
+                checked={provider === 'copilot-proxy'}
+                onChange={() => handleProviderChange('copilot-proxy')}
+              />
+              <span className="label-text">GitHub Copilot Proxy</span>
+            </label>
           </div>
           <p className="text-xs opacity-50">
-            Your API key is encrypted and stored locally. It never leaves your browser.
+            {provider === 'anthropic'
+              ? 'Calls Anthropic API directly from the browser. Requires an API key.'
+              : 'Routes through GitHub Copilot\'s backend. Requires a GitHub token with Copilot access.'}
           </p>
         </div>
       </div>
+
+      {/* ---- API Key (Anthropic Direct) ---- */}
+      {provider === 'anthropic' && (
+        <div className="card card-bordered bg-base-200">
+          <div className="card-body p-4 sm:p-6 gap-3">
+            <h3 className="card-title text-base gap-2"><KeyRound className="w-4 h-4" /> Anthropic API Key</h3>
+            <div className="flex gap-2">
+              <input
+                type={apiKeyMasked ? 'password' : 'text'}
+                className="input input-bordered input-sm w-full flex-1 font-mono"
+                placeholder="sk-ant-..."
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setApiKeyMasked(!apiKeyMasked)}
+              >
+                {apiKeyMasked ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleSaveApiKey}
+                disabled={!apiKey.trim()}
+              >
+                Save
+              </button>
+              {apiKeySaved && (
+                <span className="text-success text-sm flex items-center gap-1"><Check className="w-4 h-4" /> Saved</span>
+              )}
+            </div>
+            <p className="text-xs opacity-50">
+              Your API key is encrypted and stored locally. It never leaves your browser.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ---- GitHub Copilot Proxy ---- */}
+      {provider === 'copilot-proxy' && (
+        <div className="card card-bordered bg-base-200">
+          <div className="card-body p-4 sm:p-6 gap-3">
+            <h3 className="card-title text-base gap-2"><Github className="w-4 h-4" /> GitHub Copilot</h3>
+
+            {copilotConnected ? (
+              <>
+                <div className="badge badge-success gap-1.5 py-3 px-4">
+                  <Check className="w-4 h-4" /> Connected to Copilot
+                </div>
+                <p className="text-xs opacity-50">
+                  Proxy is authenticated and ready. You can start chatting.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <button
+                    className={`btn btn-primary btn-sm ${copilotChecking ? 'loading' : ''}`}
+                    onClick={handleConnectCopilot}
+                    disabled={copilotChecking}
+                  >
+                    {copilotChecking ? 'Checking...' : 'Connect to Copilot'}
+                  </button>
+                </div>
+
+                {copilotStatus && !copilotConnected && (
+                  <p className="text-sm text-warning">{copilotStatus}</p>
+                )}
+
+                {showManualToken && (
+                  <>
+                    <div className="divider text-xs opacity-50">Or enter token manually</div>
+                    <div className="flex gap-2">
+                      <input
+                        type={githubTokenMasked ? 'password' : 'text'}
+                        className="input input-bordered input-sm w-full flex-1 font-mono"
+                        placeholder="ghp_... or gho_..."
+                        value={githubToken}
+                        onChange={(e) => setGithubToken(e.target.value)}
+                      />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setGithubTokenMasked(!githubTokenMasked)}
+                      >
+                        {githubTokenMasked ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={handleSaveGithubToken}
+                        disabled={!githubToken.trim()}
+                      >
+                        Save & Verify
+                      </button>
+                      {githubTokenSaved && (
+                        <span className="text-success text-sm flex items-center gap-1"><Check className="w-4 h-4" /> Connected</span>
+                      )}
+                    </div>
+                    {githubTokenError && (
+                      <p className="text-error text-sm">{githubTokenError}</p>
+                    )}
+                  </>
+                )}
+
+                <p className="text-xs opacity-50">
+                  Make sure the proxy server is running (<code className="font-mono">npm run dev:proxy</code>).
+                  Set <code className="font-mono">GITHUB_TOKEN</code> env var or use <code className="font-mono">gh auth token</code>.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ---- Model ---- */}
       <div className="card card-bordered bg-base-200">
@@ -195,7 +388,7 @@ export function SettingsPage() {
           >
             {MODELS.map((m) => (
               <option key={m.value} value={m.value}>
-                {m.label}
+                {m.label}{m.multiplier !== 1 ? ` (${m.multiplier}x)` : ''}
               </option>
             ))}
           </select>
