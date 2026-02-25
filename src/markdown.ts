@@ -2,7 +2,7 @@
 // OpenBrowserClaw — Lightweight Markdown → HTML renderer
 // ---------------------------------------------------------------------------
 //
-// Zero dependencies.  Handles the subset of Markdown that Claude outputs:
+// Zero dependencies.  Handles the subset of Markdown that Gemini outputs:
 //   - Headings (#, ##, ###, ####)
 //   - Bold (**text**), italic (*text* / _text_), bold-italic (***text***),
 //     strikethrough (~~text~~)

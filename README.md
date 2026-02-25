@@ -12,7 +12,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`, paste your [Anthropic API key](https://console.anthropic.com/), and start chatting.
+Open `http://localhost:5173`, paste your [Gemini API key](https://aistudio.google.com/apikey), and start chatting.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ Open `http://localhost:5173`, paste your [Anthropic API key](https://console.ant
 │          ┌───────────┼───────────┐                       │
 │          ▼           ▼           ▼                       │
 │     IndexedDB      OPFS    Agent Worker                  │
-│     (messages,   (group    (Claude API                   │
+│     (messages,   (group    (Gemini API                   │
 │      tasks,       files,    tool-use loop,               │
 │      config)     memory)    WebVM sandbox)               │
 │                                                          │
@@ -49,7 +49,7 @@ Open `http://localhost:5173`, paste your [Anthropic API key](https://console.ant
 |------|---------|
 | `src/index.ts` | Entry point, bootstraps UI |
 | `src/orchestrator.ts` | State machine, message routing, agent invocation |
-| `src/agent-worker.ts` | Web Worker: Claude API tool-use loop |
+| `src/agent-worker.ts` | Web Worker: Gemini API tool-use loop |
 | `src/tools.ts` | Tool definitions (bash, read/write files, fetch, etc.) |
 | `src/vm.ts` | WebVM wrapper (v86 Alpine Linux in WASM) |
 | `src/db.ts` | IndexedDB: messages, sessions, tasks, config |
@@ -65,9 +65,9 @@ Open `http://localhost:5173`, paste your [Anthropic API key](https://console.ant
 
 1. **You type a message** in the browser chat (or send one via Telegram)
 2. **The orchestrator** checks the trigger pattern, saves to IndexedDB, queues for processing
-3. **The agent worker** (a Web Worker) sends your message + conversation history to the Anthropic API
-4. **Claude responds**, possibly using tools (bash, file I/O, fetch, JavaScript)
-5. **Tool results** are fed back to Claude in a loop until it produces a final text response
+3. **The agent worker** (a Web Worker) sends your message + conversation history to the Gemini API
+4. **Gemini responds**, possibly using tools (bash, file I/O, fetch, JavaScript)
+5. **Tool results** are fed back to Gemini in a loop until it produces a final text response
 6. **The response** is routed back to the originating channel (browser chat or Telegram)
 
 ## Tools
@@ -78,7 +78,7 @@ Open `http://localhost:5173`, paste your [Anthropic API key](https://console.ant
 | `javascript` | Execute JS code in an isolated scope (lighter than bash) |
 | `read_file` / `write_file` / `list_files` | Manage files in OPFS per-group workspace |
 | `fetch_url` | HTTP requests via browser `fetch()` (subject to CORS) |
-| `update_memory` | Persist context to CLAUDE.md (loaded on every conversation) |
+| `update_memory` | Persist context to MEMORY.md (loaded on every conversation) |
 | `create_task` | Schedule recurring tasks with cron expressions |
 
 ## Telegram
@@ -116,7 +116,7 @@ Without these assets, the `bash` tool returns a helpful error. All other tools w
 | Files | Filesystem | OPFS |
 | Primary channel | WhatsApp | In-browser chat |
 | Other channels | Telegram, Discord | Telegram |
-| Agent SDK | Claude Agent SDK | Raw Anthropic API |
+| Agent SDK | Claude Agent SDK | Raw Gemini API |
 | Background tasks | launchd service | setInterval (tab must be open) |
 | Deployment | Self-hosted server | Static files (any CDN) |
 | Dependencies | ~50 npm packages | 0 runtime deps |
@@ -142,7 +142,7 @@ No server needed. It's just HTML, CSS, and JS.
 
 ## Security
 
-OpenBrowserClaw is a proof of concept. All data stays in your browser, nothing is sent to any server except the Anthropic API. Here's an honest look at the current security posture:
+OpenBrowserClaw is a proof of concept. All data stays in your browser, nothing is sent to any server except the Gemini API. Here's an honest look at the current security posture:
 
 **What it does:**
 - API keys are encrypted at rest with AES-256-GCM using a non-extractable `CryptoKey` stored in IndexedDB. JavaScript cannot export the raw key material.
@@ -151,7 +151,7 @@ OpenBrowserClaw is a proof of concept. All data stays in your browser, nothing i
 
 **What it doesn't do (yet):**
 - The encryption protects against casual inspection (DevTools, disk forensics) but not a full XSS attack on the same origin, an attacker with script execution could call the encrypt/decrypt API.
-- The `javascript` tool runs `eval()` in the Worker, which has access to `fetch()`. This means Claude can make arbitrary HTTP requests through the JS tool regardless of any `fetch_url` restrictions.
+- The `javascript` tool runs `eval()` in the Worker, which has access to `fetch()`. This means Gemini can make arbitrary HTTP requests through the JS tool regardless of any `fetch_url` restrictions.
 - Outgoing HTTP requests (via `fetch_url` or the JS tool) have no user confirmation step.
 - The Telegram bot token is currently stored in plaintext.
 

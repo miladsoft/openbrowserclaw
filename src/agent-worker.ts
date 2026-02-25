@@ -2,19 +2,47 @@
 // OpenBrowserClaw — Agent Worker
 // ---------------------------------------------------------------------------
 //
-// Runs in a dedicated Web Worker. Owns the Claude API tool-use loop.
+// Runs in a dedicated Web Worker. Owns the Gemini API tool-use loop.
 // Communicates with the main thread via postMessage.
 //
 // This is the browser equivalent of NanoClaw's container agent runner.
-// Instead of Claude Agent SDK in a Linux container, we use raw Anthropic
-// API calls with a tool-use loop.
+// Uses raw Google Gemini API calls with a function-calling loop.
 
 import type { WorkerInbound, WorkerOutbound, InvokePayload, CompactPayload, ConversationMessage, ThinkingLogEntry, TokenUsage } from './types.js';
 import { TOOL_DEFINITIONS } from './tools.js';
-import { ANTHROPIC_API_URL, ANTHROPIC_API_VERSION, FETCH_MAX_RESPONSE } from './config.js';
+import { GEMINI_API_BASE, FETCH_MAX_RESPONSE } from './config.js';
 import { readGroupFile, writeGroupFile, listGroupFiles } from './storage.js';
 import { executeShell } from './shell.js';
 import { ulid } from './ulid.js';
+
+// ---------------------------------------------------------------------------
+// Gemini API types (local to worker)
+// ---------------------------------------------------------------------------
+
+interface GeminiPart {
+  text?: string;
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: { content: string } };
+}
+
+interface GeminiContent {
+  role: 'user' | 'model';
+  parts: GeminiPart[];
+}
+
+interface GeminiResponse {
+  candidates?: Array<{
+    content: { role: string; parts: GeminiPart[] };
+    finishReason: string;
+  }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+    cachedContentTokenCount?: number;
+  };
+  error?: { code: number; message: string; status: string };
+}
 
 // ---------------------------------------------------------------------------
 // Message handler
@@ -39,6 +67,57 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
 // Shell emulator needs no boot — it's pure JS over OPFS
 
 // ---------------------------------------------------------------------------
+// Convert internal messages to Gemini format
+// ---------------------------------------------------------------------------
+
+function toGeminiContents(messages: ConversationMessage[]): GeminiContent[] {
+  const contents: GeminiContent[] = [];
+
+  for (const msg of messages) {
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+
+    if (typeof msg.content === 'string') {
+      contents.push({ role, parts: [{ text: msg.content }] });
+    } else if (Array.isArray(msg.content)) {
+      // Content blocks — convert to Gemini parts
+      const parts: GeminiPart[] = [];
+      for (const block of msg.content) {
+        if ('text' in block && typeof (block as { text?: string }).text === 'string') {
+          parts.push({ text: (block as { text: string }).text });
+        } else if ('functionCall' in block) {
+          parts.push({ functionCall: (block as { functionCall: GeminiPart['functionCall'] }).functionCall });
+        } else if ('functionResponse' in block) {
+          parts.push({ functionResponse: (block as { functionResponse: GeminiPart['functionResponse'] }).functionResponse });
+        }
+      }
+      if (parts.length > 0) {
+        contents.push({ role, parts });
+      }
+    }
+  }
+
+  // Gemini requires alternating user/model roles. Merge consecutive same-role messages.
+  const merged: GeminiContent[] = [];
+  for (const c of contents) {
+    if (merged.length > 0 && merged[merged.length - 1].role === c.role) {
+      merged[merged.length - 1].parts.push(...c.parts);
+    } else {
+      merged.push({ ...c, parts: [...c.parts] });
+    }
+  }
+
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
+// Build Gemini API URL
+// ---------------------------------------------------------------------------
+
+function buildGeminiUrl(model: string, apiKey: string): string {
+  return `${GEMINI_API_BASE}/models/${model}:generateContent?key=${apiKey}`;
+}
+
+// ---------------------------------------------------------------------------
 // Agent invocation — tool-use loop
 // ---------------------------------------------------------------------------
 
@@ -49,7 +128,7 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
   log(groupId, 'info', 'Starting', `Model: ${model} · Max tokens: ${maxTokens}`);
 
   try {
-    let currentMessages: ConversationMessage[] = [...messages];
+    let currentContents: GeminiContent[] = toGeminiContents(messages);
     let iterations = 0;
     const maxIterations = 25; // Safety limit to prevent infinite loops
 
@@ -57,103 +136,134 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
       iterations++;
 
       const body = {
-        model,
-        max_tokens: maxTokens,
-        cache_control: { type: 'ephemeral' },
-        system: systemPrompt,
-        messages: currentMessages,
-        tools: TOOL_DEFINITIONS,
+        contents: currentContents,
+        systemInstruction: {
+          parts: [{ text: systemPrompt }],
+        },
+        tools: [{
+          functionDeclarations: TOOL_DEFINITIONS,
+        }],
+        generationConfig: {
+          maxOutputTokens: maxTokens,
+          temperature: 1.0,
+        },
       };
 
-      log(groupId, 'api-call', `API call #${iterations}`, `${currentMessages.length} messages in context`);
+      log(groupId, 'api-call', `API call #${iterations}`, `${currentContents.length} messages in context`);
 
-      const res = await fetch(ANTHROPIC_API_URL, {
+      const res = await fetch(buildGeminiUrl(model, apiKey), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': ANTHROPIC_API_VERSION,
-          'anthropic-dangerous-direct-browser-access': 'true',
         },
         body: JSON.stringify(body),
       });
 
       if (!res.ok) {
         const errBody = await res.text();
-        throw new Error(`Anthropic API error ${res.status}: ${errBody}`);
+        throw new Error(`Gemini API error ${res.status}: ${errBody}`);
       }
 
-      const result = await res.json();
+      const result: GeminiResponse = await res.json();
+
+      // Check for API-level errors
+      if (result.error) {
+        throw new Error(`Gemini API error ${result.error.code}: ${result.error.message}`);
+      }
 
       // Emit token usage
-      if (result.usage) {
+      if (result.usageMetadata) {
         post({
           type: 'token-usage',
           payload: {
             groupId,
-            inputTokens: result.usage.input_tokens || 0,
-            outputTokens: result.usage.output_tokens || 0,
-            cacheReadTokens: result.usage.cache_read_input_tokens || 0,
-            cacheCreationTokens: result.usage.cache_creation_input_tokens || 0,
+            inputTokens: result.usageMetadata.promptTokenCount || 0,
+            outputTokens: result.usageMetadata.candidatesTokenCount || 0,
+            totalTokens: result.usageMetadata.totalTokenCount || 0,
+            cachedTokens: result.usageMetadata.cachedContentTokenCount || 0,
             contextLimit: getContextLimit(model),
           },
         });
       }
 
-      // Log any text blocks in the response (intermediate reasoning)
-      for (const block of result.content) {
-        if (block.type === 'text' && block.text) {
-          const preview = block.text.length > 200 ? block.text.slice(0, 200) + '…' : block.text;
+      const candidate = result.candidates?.[0];
+      if (!candidate?.content?.parts) {
+        throw new Error('Gemini API returned no candidates or empty response');
+      }
+
+      const parts = candidate.content.parts;
+
+      // Check for function calls in the response
+      const functionCalls = parts.filter(
+        (p): p is GeminiPart & { functionCall: NonNullable<GeminiPart['functionCall']> } =>
+          !!p.functionCall,
+      );
+
+      // Log text parts
+      for (const part of parts) {
+        if (part.text) {
+          const preview = part.text.length > 200 ? part.text.slice(0, 200) + '…' : part.text;
           log(groupId, 'text', 'Response text', preview);
         }
       }
 
-      if (result.stop_reason === 'tool_use') {
-        // Execute all tool calls
-        const toolResults = [];
-        for (const block of result.content) {
-          if (block.type === 'tool_use') {
-            const inputPreview = JSON.stringify(block.input);
-            const inputShort = inputPreview.length > 300 ? inputPreview.slice(0, 300) + '…' : inputPreview;
-            log(groupId, 'tool-call', `Tool: ${block.name}`, inputShort);
+      if (functionCalls.length > 0) {
+        // Execute all function calls
+        const functionResponses: GeminiPart[] = [];
 
-            post({
-              type: 'tool-activity',
-              payload: { groupId, tool: block.name, status: 'running' },
-            });
+        for (const fc of functionCalls) {
+          const { name, args } = fc.functionCall;
+          const inputPreview = JSON.stringify(args);
+          const inputShort = inputPreview.length > 300 ? inputPreview.slice(0, 300) + '…' : inputPreview;
+          log(groupId, 'tool-call', `Tool: ${name}`, inputShort);
 
-            const output = await executeTool(block.name, block.input, groupId);
+          post({
+            type: 'tool-activity',
+            payload: { groupId, tool: name, status: 'running' },
+          });
 
-            const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
-            const outputShort = outputStr.length > 500 ? outputStr.slice(0, 500) + '…' : outputStr;
-            log(groupId, 'tool-result', `Result: ${block.name}`, outputShort);
+          const output = await executeTool(name, args, groupId);
 
-            post({
-              type: 'tool-activity',
-              payload: { groupId, tool: block.name, status: 'done' },
-            });
+          const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
+          const outputShort = outputStr.length > 500 ? outputStr.slice(0, 500) + '…' : outputStr;
+          log(groupId, 'tool-result', `Result: ${name}`, outputShort);
 
-            toolResults.push({
-              type: 'tool_result' as const,
-              tool_use_id: block.id,
-              content: typeof output === 'string'
-                ? output.slice(0, 100_000)
-                : JSON.stringify(output).slice(0, 100_000),
-            });
-          }
+          post({
+            type: 'tool-activity',
+            payload: { groupId, tool: name, status: 'done' },
+          });
+
+          functionResponses.push({
+            functionResponse: {
+              name,
+              response: {
+                content: typeof output === 'string'
+                  ? output.slice(0, 100_000)
+                  : JSON.stringify(output).slice(0, 100_000),
+              },
+            },
+          });
         }
 
-        // Continue the conversation with tool results
-        currentMessages.push({ role: 'assistant', content: result.content });
-        currentMessages.push({ role: 'user', content: toolResults as any });
+        // Add model's response (with function calls) to conversation
+        currentContents.push({
+          role: 'model',
+          parts,
+        });
+
+        // Add function responses as user message
+        currentContents.push({
+          role: 'user',
+          parts: functionResponses,
+        });
 
         // Re-signal typing between tool iterations
         post({ type: 'typing', payload: { groupId } });
       } else {
-        // Final response — extract text
-        const text = result.content
-          .filter((b: { type: string }) => b.type === 'text')
-          .map((b: { text: string }) => b.text)
+        // Final response — extract text from all parts
+        const text = parts
+          .filter((p): p is GeminiPart & { text: string } => !!p.text)
+          .map((p) => p.text)
           .join('');
 
         // Strip internal tags (matching NanoClaw pattern)
@@ -179,7 +289,7 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Context compaction — ask Claude to summarize the conversation
+// Context compaction — ask Gemini to summarize the conversation
 // ---------------------------------------------------------------------------
 
 async function handleCompact(payload: CompactPayload): Promise<void> {
@@ -208,35 +318,43 @@ async function handleCompact(payload: CompactPayload): Promise<void> {
       },
     ];
 
+    const compactContents = toGeminiContents(compactMessages);
+
     const body = {
-      model,
-      max_tokens: Math.min(maxTokens, 4096),
-      cache_control: { type: 'ephemeral' },
-      system: compactSystemPrompt,
-      messages: compactMessages,
+      contents: compactContents,
+      systemInstruction: {
+        parts: [{ text: compactSystemPrompt }],
+      },
+      generationConfig: {
+        maxOutputTokens: Math.min(maxTokens, 4096),
+        temperature: 0.5,
+      },
     };
 
-    const res = await fetch(ANTHROPIC_API_URL, {
+    const res = await fetch(buildGeminiUrl(model, apiKey), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_API_VERSION,
-        'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify(body),
     });
 
     if (!res.ok) {
       const errBody = await res.text();
-      throw new Error(`Anthropic API error ${res.status}: ${errBody}`);
+      throw new Error(`Gemini API error ${res.status}: ${errBody}`);
     }
 
-    const result = await res.json();
-    const summary = result.content
-      .filter((b: { type: string }) => b.type === 'text')
-      .map((b: { text: string }) => b.text)
-      .join('');
+    const result: GeminiResponse = await res.json();
+
+    if (result.error) {
+      throw new Error(`Gemini API error ${result.error.code}: ${result.error.message}`);
+    }
+
+    const candidate = result.candidates?.[0];
+    const summary = candidate?.content?.parts
+      ?.filter((p): p is GeminiPart & { text: string } => !!p.text)
+      .map((p) => p.text)
+      .join('') || '';
 
     log(groupId, 'info', 'Compaction complete', `Summary: ${summary.length} chars`);
     post({ type: 'compact-done', payload: { groupId, summary } });
@@ -304,7 +422,7 @@ async function executeTool(
       }
 
       case 'update_memory':
-        await writeGroupFile(groupId, 'CLAUDE.md', input.content as string);
+        await writeGroupFile(groupId, 'MEMORY.md', input.content as string);
         return 'Memory updated successfully.';
 
       case 'create_task': {
@@ -382,9 +500,10 @@ function stripHtml(html: string): string {
 }
 
 /** Map model names to their context window limits (tokens). */
-function getContextLimit(_model: string): number {
-  // The actual session context window — 200k tokens for Claude Sonnet/Opus.
-  return 200_000;
+function getContextLimit(model: string): number {
+  // Gemini 2.5 Pro: 1M tokens, Gemini 2.5/2.0 Flash: 1M tokens
+  if (model.includes('pro')) return 1_000_000;
+  return 1_048_576;
 }
 
 function log(

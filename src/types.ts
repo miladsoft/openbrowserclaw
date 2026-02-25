@@ -36,17 +36,17 @@ export interface Session {
   updatedAt: number;
 }
 
-/** A message in the Claude API conversation format */
+/** A message in the Gemini API conversation format */
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string | ContentBlock[];
 }
 
-/** Content block for tool use conversations */
+/** Content block (part) for Gemini conversations */
 export type ContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string };
+  | { text: string }
+  | { functionCall: { name: string; args: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: { content: string } } };
 
 /** Config entry */
 export interface ConfigEntry {
@@ -106,8 +106,8 @@ export interface TokenUsage {
   groupId: string;
   inputTokens: number;
   outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
   contextLimit: number;
 }
 
@@ -120,12 +120,12 @@ export interface ThinkingLogEntry {
   detail?: string;
 }
 
-/** Tool definition for Claude API */
+/** Function declaration for Gemini API */
 export interface ToolDefinition {
   name: string;
   description: string;
-  input_schema: {
-    type: 'object';
+  parameters: {
+    type: 'OBJECT';
     properties: Record<string, unknown>;
     required?: string[];
   };

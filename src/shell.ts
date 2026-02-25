@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 //
 // A minimal bash-like shell that runs entirely in JS using OPFS for the
-// filesystem.  Handles the most common commands Claude typically uses.
+// filesystem.  Handles the most common commands the AI typically uses.
 // Falls back to the v86 WebVM when available, but works standalone.
 //
 // Supported builtins:

@@ -15,9 +15,9 @@ import { getOrchestrator } from '../../stores/orchestrator-store.js';
 import { useThemeStore, type ThemeChoice } from '../../stores/theme-store.js';
 
 const MODELS = [
-  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
 ];
 
 function formatBytes(bytes: number): string {
@@ -59,7 +59,7 @@ export function SettingsPage() {
   useEffect(() => {
     async function load() {
       // API key
-      const encKey = await getConfig(CONFIG_KEYS.ANTHROPIC_API_KEY);
+      const encKey = await getConfig(CONFIG_KEYS.GEMINI_API_KEY);
       if (encKey) {
         try {
           const dec = await decryptValue(encKey);
@@ -150,12 +150,12 @@ export function SettingsPage() {
       {/* ---- API Key ---- */}
       <div className="card card-bordered bg-base-200">
         <div className="card-body p-4 sm:p-6 gap-3">
-          <h3 className="card-title text-base gap-2"><KeyRound className="w-4 h-4" /> Anthropic API Key</h3>
+          <h3 className="card-title text-base gap-2"><KeyRound className="w-4 h-4" /> Gemini API Key</h3>
           <div className="flex gap-2">
             <input
               type={apiKeyMasked ? 'password' : 'text'}
               className="input input-bordered input-sm w-full flex-1 font-mono"
-              placeholder="sk-ant-..."
+              placeholder="AIza..."
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />

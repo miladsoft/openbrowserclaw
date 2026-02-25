@@ -22,8 +22,8 @@ export function ContextBar({ usage }: Props) {
   else if (pct >= 60) colorClass = 'progress-warning';
 
   const cacheInfo =
-    usage.cacheReadTokens > 0
-      ? ` (${formatTokens(usage.cacheReadTokens)} cached)`
+    usage.cachedTokens > 0
+      ? ` (${formatTokens(usage.cachedTokens)} cached)`
       : '';
 
   return (

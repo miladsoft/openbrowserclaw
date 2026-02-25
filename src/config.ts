@@ -16,17 +16,14 @@ export const TRIGGER_PATTERN = buildTriggerPattern(ASSISTANT_NAME);
 /** How many recent messages to include in agent context */
 export const CONTEXT_WINDOW_SIZE = 50;
 
-/** Max tokens for Claude API response */
+/** Max tokens for Gemini API response */
 export const DEFAULT_MAX_TOKENS = 8096;
 
 /** Default model */
-export const DEFAULT_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_MODEL = 'gemini-2.5-flash';
 
-/** Anthropic API endpoint */
-export const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-
-/** Anthropic API version header */
-export const ANTHROPIC_API_VERSION = '2023-06-01';
+/** Gemini API base URL */
+export const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 /** Telegram Bot API base URL */
 export const TELEGRAM_API_BASE = 'https://api.telegram.org/bot';
@@ -60,7 +57,7 @@ export const DEFAULT_GROUP_ID = 'br:main';
 
 /** Config keys */
 export const CONFIG_KEYS = {
-  ANTHROPIC_API_KEY: 'anthropic_api_key',
+  GEMINI_API_KEY: 'gemini_api_key',
   TELEGRAM_BOT_TOKEN: 'telegram_bot_token',
   TELEGRAM_CHAT_IDS: 'telegram_chat_ids',
   TRIGGER_PATTERN: 'trigger_pattern',

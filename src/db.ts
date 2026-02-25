@@ -292,7 +292,7 @@ export function clearGroupMessages(groupId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Build conversation messages for Claude API from stored messages
+// Build conversation messages for Gemini API from stored messages
 // ---------------------------------------------------------------------------
 
 export async function buildConversationMessages(

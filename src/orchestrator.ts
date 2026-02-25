@@ -117,14 +117,14 @@ export class Orchestrator {
     // Load config
     this.assistantName = (await getConfig(CONFIG_KEYS.ASSISTANT_NAME)) || ASSISTANT_NAME;
     this.triggerPattern = buildTriggerPattern(this.assistantName);
-    const storedKey = await getConfig(CONFIG_KEYS.ANTHROPIC_API_KEY);
+    const storedKey = await getConfig(CONFIG_KEYS.GEMINI_API_KEY);
     if (storedKey) {
       try {
         this.apiKey = await decryptValue(storedKey);
       } catch {
         // Stored as plaintext from before encryption — clear it
         this.apiKey = '';
-        await setConfig(CONFIG_KEYS.ANTHROPIC_API_KEY, '');
+        await setConfig(CONFIG_KEYS.GEMINI_API_KEY, '');
       }
     }
     this.model = (await getConfig(CONFIG_KEYS.MODEL)) || DEFAULT_MODEL;
@@ -195,7 +195,7 @@ export class Orchestrator {
   async setApiKey(key: string): Promise<void> {
     this.apiKey = key;
     const encrypted = await encryptValue(key);
-    await setConfig(CONFIG_KEYS.ANTHROPIC_API_KEY, encrypted);
+    await setConfig(CONFIG_KEYS.GEMINI_API_KEY, encrypted);
   }
 
   /**
@@ -258,7 +258,7 @@ export class Orchestrator {
 
   /**
    * Compact (summarize) the current context to reduce token usage.
-   * Asks Claude to produce a summary, then replaces the history with it.
+   * Asks Gemini to produce a summary, then replaces the history with it.
    */
   async compactContext(groupId: string = DEFAULT_GROUP_ID): Promise<void> {
     if (!this.apiKey) {
@@ -283,7 +283,7 @@ export class Orchestrator {
     // Load group memory
     let memory = '';
     try {
-      memory = await readGroupFile(groupId, 'CLAUDE.md');
+      memory = await readGroupFile(groupId, 'MEMORY.md');
     } catch {
       // No memory file yet
     }
@@ -355,7 +355,7 @@ export class Orchestrator {
       const msg = this.messageQueue.shift()!;
       this.events.emit('error', {
         groupId: msg.groupId,
-        error: 'API key not configured. Go to Settings to add your Anthropic API key.',
+        error: 'API key not configured. Go to Settings to add your Gemini API key.',
       });
       return;
     }
@@ -402,7 +402,7 @@ export class Orchestrator {
     // Load group memory
     let memory = '';
     try {
-      memory = await readGroupFile(groupId, 'CLAUDE.md');
+      memory = await readGroupFile(groupId, 'MEMORY.md');
     } catch {
       // No memory file yet — that's fine
     }
@@ -546,7 +546,7 @@ function buildSystemPrompt(assistantName: string, memory: string): string {
     '- **javascript**: Execute JavaScript code. Lighter than bash — no VM boot needed. Use for calculations, data transforms.',
     '- **read_file** / **write_file** / **list_files**: Manage files in the group workspace (persisted in browser storage).',
     '- **fetch_url**: Make HTTP requests (subject to CORS).',
-    '- **update_memory**: Persist important context to CLAUDE.md — loaded on every conversation.',
+    '- **update_memory**: Persist important context to MEMORY.md — loaded on every conversation.',
     '- **create_task**: Schedule recurring tasks with cron expressions.',
     '',
     'Guidelines:',
