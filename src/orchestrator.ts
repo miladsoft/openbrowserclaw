@@ -382,7 +382,7 @@ export class Orchestrator {
     this.events.emit('typing', { groupId, typing: true });
 
     // If this is a scheduled task, save the prompt as a user message so
-    // it appears in conversation context and in the chat UI.
+    // it appears in conversation context (but not in the chat UI).
     if (triggerContent.startsWith('[SCHEDULED TASK]')) {
       this.pendingScheduledTasks.add(groupId);
       const stored: StoredMessage = {
@@ -396,7 +396,8 @@ export class Orchestrator {
         isTrigger: true,
       };
       await saveMessage(stored);
-      this.events.emit('message', stored);
+      // Note: intentionally NOT emitting 'message' event here —
+      // only the AI response should appear in the chat UI.
     }
 
     // Load group memory
