@@ -34,6 +34,7 @@ interface OrchestratorStoreState {
 }
 
 let orchestratorInstance: Orchestrator | null = null;
+let storeInitialized = false;
 
 export function getOrchestrator(): Orchestrator {
   if (!orchestratorInstance) throw new Error('Orchestrator not initialized');
@@ -70,7 +71,11 @@ export const useOrchestratorStore = create<OrchestratorStoreState>((set, get) =>
 
   loadHistory: async () => {
     const msgs = await getRecentMessages(get().activeGroupId, 200);
-    set({ messages: msgs });
+    // Filter out scheduled task trigger prompts — only show AI responses
+    const filtered = msgs.filter(
+      (m) => m.isFromMe || !m.content.startsWith('[SCHEDULED TASK]'),
+    );
+    set({ messages: filtered });
   },
 }));
 
@@ -79,11 +84,17 @@ export const useOrchestratorStore = create<OrchestratorStoreState>((set, get) =>
  * Subscribes to all EventBus events and bridges them to Zustand state.
  */
 export async function initOrchestratorStore(orch: Orchestrator): Promise<void> {
+  // Guard against double-init (React StrictMode calls useEffect twice in dev)
+  if (storeInitialized) return;
+  storeInitialized = true;
+
   orchestratorInstance = orch;
   const store = useOrchestratorStore;
 
   // Subscribe to events
   orch.events.on('message', (msg) => {
+    // Don't show scheduled task trigger prompts in the chat UI
+    if (!msg.isFromMe && msg.content.startsWith('[SCHEDULED TASK]')) return;
     store.setState((s) => ({ messages: [...s.messages, msg] }));
   });
 

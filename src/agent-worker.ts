@@ -161,14 +161,14 @@ async function handleInvoke(payload: InvokePayload): Promise<void> {
 
       if (!res.ok) {
         const errBody = await res.text();
-        throw new Error(`Gemini API error ${res.status}: ${errBody}`);
+        throw new Error(formatApiError(res.status, errBody));
       }
 
       const result: GeminiResponse = await res.json();
 
       // Check for API-level errors
       if (result.error) {
-        throw new Error(`Gemini API error ${result.error.code}: ${result.error.message}`);
+        throw new Error(formatApiError(result.error.code, result.error.message));
       }
 
       // Emit token usage
@@ -341,13 +341,13 @@ async function handleCompact(payload: CompactPayload): Promise<void> {
 
     if (!res.ok) {
       const errBody = await res.text();
-      throw new Error(`Gemini API error ${res.status}: ${errBody}`);
+      throw new Error(formatApiError(res.status, errBody));
     }
 
     const result: GeminiResponse = await res.json();
 
     if (result.error) {
-      throw new Error(`Gemini API error ${result.error.code}: ${result.error.message}`);
+      throw new Error(formatApiError(result.error.code, result.error.message));
     }
 
     const candidate = result.candidates?.[0];
@@ -516,4 +516,37 @@ function log(
     type: 'thinking-log',
     payload: { groupId, kind, timestamp: Date.now(), label, detail },
   });
+}
+
+/** Convert raw Gemini API errors into readable messages. */
+function formatApiError(status: number | string, rawMessage: string): string {
+  const code = typeof status === 'string' ? parseInt(status, 10) : status;
+
+  // Try to extract the message from a JSON error body
+  let message = rawMessage;
+  try {
+    const parsed = JSON.parse(rawMessage);
+    if (parsed?.error?.message) message = parsed.error.message;
+  } catch {
+    // Not JSON — use raw text
+  }
+
+  switch (code) {
+    case 400:
+      return 'Invalid request sent to Gemini API. Please try again.';
+    case 401:
+    case 403:
+      return 'API key is invalid or does not have permission. Go to Settings and check your Gemini API key.';
+    case 404:
+      return 'Model not found. Please select a valid model in Settings.';
+    case 429:
+      return 'Rate limit exceeded. Please wait a moment and try again.';
+    case 500:
+    case 503:
+      return 'Gemini API is temporarily unavailable. Please try again later.';
+    default:
+      // Keep it short — strip JSON noise
+      if (message.length > 200) message = message.slice(0, 200) + '…';
+      return `Gemini API error (${code}): ${message}`;
+  }
 }

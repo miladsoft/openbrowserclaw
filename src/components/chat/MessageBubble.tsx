@@ -62,6 +62,7 @@ function formatTime(ts: number): string {
 export function MessageBubble({ message }: Props) {
   const isAssistant = message.isFromMe;
   const senderName = isAssistant ? getSenderName(message) : 'You';
+  const isError = isAssistant && message.content.startsWith('⚠️');
 
   return (
     <div className={`chat ${isAssistant ? 'chat-start' : 'chat-end'}`}>
@@ -71,10 +72,19 @@ export function MessageBubble({ message }: Props) {
       </div>
       <div
         className={`chat-bubble ${
-          isAssistant ? '' : 'chat-bubble-primary'
+          isError
+            ? 'chat-bubble-error'
+            : isAssistant
+              ? ''
+              : 'chat-bubble-primary'
         }`}
       >
-        {isAssistant ? (
+        {isError ? (
+          <div className="flex items-start gap-2">
+            <span className="text-lg leading-none mt-0.5">⚠️</span>
+            <span className="text-sm">{message.content.replace(/^⚠️\s*Error:\s*/i, '')}</span>
+          </div>
+        ) : isAssistant ? (
           <div className="chat-markdown">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}

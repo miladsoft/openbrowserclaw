@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react';
 import {
   Palette, KeyRound, Eye, EyeOff, Bot, MessageSquare,
-  Smartphone, HardDrive, Lock, Check,
+  Smartphone, HardDrive, Lock, Check, Bell,
 } from 'lucide-react';
 import { getConfig, setConfig } from '../../db.js';
 import { CONFIG_KEYS } from '../../config.js';
@@ -13,6 +13,7 @@ import { getStorageEstimate, requestPersistentStorage } from '../../storage.js';
 import { decryptValue } from '../../crypto.js';
 import { getOrchestrator } from '../../stores/orchestrator-store.js';
 import { useThemeStore, type ThemeChoice } from '../../stores/theme-store.js';
+import { requestNotificationPermission, isNotificationEnabled } from '../../notifications.js';
 
 const MODELS = [
   { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
@@ -51,6 +52,10 @@ export function SettingsPage() {
   const [storageUsage, setStorageUsage] = useState(0);
   const [storageQuota, setStorageQuota] = useState(0);
   const [isPersistent, setIsPersistent] = useState(false);
+
+  // Notifications
+  const [notifEnabled, setNotifEnabled] = useState(isNotificationEnabled());
+  const [notifUnsupported] = useState(!('Notification' in window));
 
   // Theme
   const { theme, setTheme } = useThemeStore();
@@ -120,6 +125,11 @@ export function SettingsPage() {
   async function handleRequestPersistent() {
     const granted = await requestPersistentStorage();
     setIsPersistent(granted);
+  }
+
+  async function handleEnableNotifications() {
+    const permission = await requestNotificationPermission();
+    setNotifEnabled(permission === 'granted');
   }
 
   const storagePercent = storageQuota > 0 ? (storageUsage / storageQuota) * 100 : 0;
@@ -259,6 +269,33 @@ export function SettingsPage() {
               <span className="text-success text-sm flex items-center gap-1"><Check className="w-4 h-4" /> Saved</span>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* ---- Notifications ---- */}
+      <div className="card card-bordered bg-base-200">
+        <div className="card-body p-4 sm:p-6 gap-3">
+          <h3 className="card-title text-base gap-2"><Bell className="w-4 h-4" /> Notifications</h3>
+          {notifUnsupported ? (
+            <p className="text-sm opacity-60">Push notifications are not supported in this browser.</p>
+          ) : notifEnabled ? (
+            <div className="badge badge-success badge-sm gap-1.5">
+              <Bell className="w-3 h-3" /> Notifications enabled
+            </div>
+          ) : (
+            <>
+              <p className="text-sm opacity-60">
+                Enable notifications to get alerted when the assistant responds
+                while the tab is in the background.
+              </p>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={handleEnableNotifications}
+              >
+                <Bell className="w-4 h-4" /> Enable Notifications
+              </button>
+            </>
+          )}
         </div>
       </div>
 

@@ -46,6 +46,7 @@ import { TelegramChannel } from './channels/telegram.js';
 import { Router } from './router.js';
 import { TaskScheduler } from './task-scheduler.js';
 import { ulid } from './ulid.js';
+import { showNotification } from './notifications.js';
 
 // ---------------------------------------------------------------------------
 // Event emitter for UI updates
@@ -524,6 +525,13 @@ export class Orchestrator {
       this.pendingScheduledTasks.delete(groupId);
       playNotificationChime();
     }
+
+    // Show push notification for every AI response
+    showNotification(
+      this.assistantName,
+      text,
+      { tag: `obc-${groupId}-${Date.now()}` },
+    );
 
     // Emit for UI
     this.events.emit('message', stored);

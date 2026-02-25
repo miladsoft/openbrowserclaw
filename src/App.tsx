@@ -2,10 +2,10 @@
 // OpenBrowserClaw — App shell
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { Orchestrator } from './orchestrator.js';
-import { initOrchestratorStore, useOrchestratorStore } from './stores/orchestrator-store.js';
+import { initOrchestratorStore, useOrchestratorStore, getOrchestrator } from './stores/orchestrator-store.js';
 import { Layout } from './components/layout/Layout.js';
 import { ChatPage } from './components/chat/ChatPage.js';
 import { FilesPage } from './components/files/FilesPage.js';
@@ -13,7 +13,6 @@ import { TasksPage } from './components/tasks/TasksPage.js';
 import { SettingsPage } from './components/settings/SettingsPage.js';
 
 export function App() {
-  const orchRef = useRef<Orchestrator | null>(null);
   const [loading, setLoading] = useState(true);
   const [initError, setInitError] = useState<string | null>(null);
   const ready = useOrchestratorStore((s) => s.ready);
@@ -24,7 +23,6 @@ export function App() {
     async function boot() {
       try {
         const orch = new Orchestrator();
-        orchRef.current = orch;
         await orch.init();
         await initOrchestratorStore(orch);
         if (!cancelled) setLoading(false);
@@ -62,7 +60,12 @@ export function App() {
     );
   }
 
-  const isConfigured = orchRef.current?.isConfigured() ?? false;
+  let isConfigured = false;
+  try {
+    isConfigured = getOrchestrator().isConfigured();
+  } catch {
+    // Orchestrator not ready yet
+  }
 
   return (
     <BrowserRouter>
