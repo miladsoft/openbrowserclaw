@@ -6,13 +6,33 @@ Built as a browser-only reimagination of NanoClaw. Same philosophy, small enough
 
 ## Quick Start
 
+### Option A: Direct Anthropic API
+
 ```bash
-cd openbrowserclaw
 npm install
 npm run dev
 ```
 
 Open `http://localhost:5173`, paste your [Anthropic API key](https://console.anthropic.com/), and start chatting.
+
+### Option B: GitHub Copilot Proxy (free with Copilot subscription)
+
+Use Claude, GPT, Gemini and Codex models through your GitHub Copilot subscription — no Anthropic API key needed.
+
+**Requirements:** A GitHub account with [Copilot Pro/Business/Enterprise](https://github.com/features/copilot).
+
+```bash
+npm install
+
+# Set your GitHub token (pick one):
+export GITHUB_TOKEN=$(gh auth token)     # if you have GitHub CLI
+export GITHUB_TOKEN="ghp_your_token"     # or paste a PAT with Copilot scope
+
+# Start proxy + frontend together:
+npm run dev:all
+```
+
+Open `http://localhost:5173`, go to **Settings**, select **GitHub Copilot Proxy**, and you're ready.
 
 ## Architecture
 
@@ -124,10 +144,12 @@ Without these assets, the `bash` tool returns a helpful error. All other tools w
 ## Development
 
 ```bash
-npm run dev        # Vite dev server with HMR
-npm run build      # Production build → dist/
-npm run preview    # Preview production build
-npm run typecheck  # TypeScript type checking
+npm run dev          # Vite dev server only (direct Anthropic mode)
+npm run dev:proxy    # Copilot proxy server only (port 3456)
+npm run dev:all      # Both proxy + Vite together
+npm run build        # Production build → dist/
+npm run preview      # Preview production build
+npm run typecheck    # TypeScript type checking
 ```
 
 ## Deploy

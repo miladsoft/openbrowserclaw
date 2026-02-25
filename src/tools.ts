@@ -169,4 +169,32 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ['code'],
     },
   },
+  {
+    name: 'html_preview',
+    description:
+      'Render HTML content as an interactive preview embedded in the chat. ' +
+      'Use this to show visual output: charts, dashboards, styled layouts, ' +
+      'interactive demos, games, or anything visual. ' +
+      'The HTML runs in a sandboxed iframe. You can include inline CSS and JavaScript. ' +
+      'External resources (CDN scripts/styles) are allowed. ' +
+      'Always include a complete HTML document with <!DOCTYPE html>.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        html: {
+          type: 'string',
+          description: 'Complete HTML document to render (include <!DOCTYPE html>, <html>, <head>, <body>)',
+        },
+        title: {
+          type: 'string',
+          description: 'Short title for the preview panel (e.g. "Dashboard", "Chart", "Game")',
+        },
+        height: {
+          type: 'number',
+          description: 'Height of the preview frame in pixels (default: 400, max: 800)',
+        },
+      },
+      required: ['html'],
+    },
+  },
 ];
